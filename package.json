@@ -1,0 +1,16 @@
+{
+  "name": "message-mover",
+  "version": "1.0.0",
+  "description": "Discord bot for moving messages between channels, inspired by Pippin the Mover",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "deploy": "node deploy-commands.js"
+  },
+  "dependencies": {
+    "@discordjs/rest": "^2.4.0",
+    "discord-api-types": "^0.37.97",
+    "discord.js": "^14.16.0",
+    "dotenv": "^16.4.5"
+  }
+}
