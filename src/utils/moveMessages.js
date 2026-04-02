@@ -1,4 +1,4 @@
-const { EmbedBuilder } = require('discord.js');
+const { EmbedBuilder, MessageFlags } = require('discord.js');
 const { getOrCreateWebhook } = require('./webhook');
 
 const DELAY_MS = 350;
@@ -50,6 +50,7 @@ function buildPayload(message, threadId, reactionEmbed) {
     embeds: embeds.length ? embeds : undefined,
     files: files.length ? files : undefined,
     allowedMentions: { parse: [] },
+    flags: MessageFlags.SuppressNotifications,
     threadId,
   };
 }
