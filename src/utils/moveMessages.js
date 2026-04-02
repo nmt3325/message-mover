@@ -1,6 +1,7 @@
+const { EmbedBuilder } = require('discord.js');
 const { getOrCreateWebhook } = require('./webhook');
 
-const DELAY_MS = 350; // delay between sends to respect rate limits
+const DELAY_MS = 350;
 const REACTION_DELAY_MS = 300;
 
 function sleep(ms) {
@@ -8,11 +9,38 @@ function sleep(ms) {
 }
 
 /**
+ * Fetch each reaction's users and return an embed like:
+ *   👍 Alice, Bob, Carol
+ *   ❤️ Dave
+ * Returns null if there are no reactions.
+ */
+async function buildReactionEmbed(message) {
+  if (message.reactions.cache.size === 0) return null;
+
+  const lines = [];
+  for (const [, reaction] of message.reactions.cache) {
+    let names;
+    try {
+      const users = await reaction.users.fetch();
+      names = users.map((u) => u.username).join(', ');
+    } catch {
+      names = `${reaction.count} user(s)`;
+    }
+    lines.push(`${reaction.emoji.toString()} ${names}`);
+  }
+
+  return new EmbedBuilder()
+    .setColor(0x2b2d31)
+    .setDescription(lines.join('\n'))
+    .toJSON();
+}
+
+/**
  * Build the webhook send payload for a single message.
  */
-function buildPayload(message, threadId) {
-  // Pass through non-gifv embeds unchanged.
+function buildPayload(message, threadId, reactionEmbed) {
   const embeds = message.embeds.filter((e) => e.data.type !== 'gifv');
+  if (reactionEmbed) embeds.push(reactionEmbed);
   const files = message.attachments.map((a) => a.url);
 
   return {
@@ -27,14 +55,10 @@ function buildPayload(message, threadId) {
 }
 
 /**
- * Add reactions from the original message onto a newly sent message.
- * The bot reacts with each emoji so they appear as real reaction bubbles.
- * Custom emojis from other servers may fail silently.
- *
- * @param {Message} sentMsg - The message that was just sent (fetched from channel)
- * @param {import('discord.js').Message} originalMessage - The original message with reactions
+ * React to sentMsg with every emoji from the original message,
+ * so reaction bubbles appear under the moved message.
  */
-async function copyReactions(sentMsg, originalMessage) {
+async function copyReactionBubbles(sentMsg, originalMessage) {
   for (const [, reaction] of originalMessage.reactions.cache) {
     try {
       await sentMsg.react(reaction.emoji);
@@ -47,11 +71,6 @@ async function copyReactions(sentMsg, originalMessage) {
 
 /**
  * Move an array of messages (sorted oldest → newest) to destChannel.
- *
- * @param {import('discord.js').Message[]} messages
- * @param {import('discord.js').TextChannel|import('discord.js').ThreadChannel} destChannel
- * @param {boolean} deleteOriginals
- * @returns {Promise<{ moved: number, failed: number }>}
  */
 async function moveMessages(messages, destChannel, deleteOriginals) {
   const { webhook, threadId } = await getOrCreateWebhook(destChannel);
@@ -62,17 +81,18 @@ async function moveMessages(messages, destChannel, deleteOriginals) {
     if (message.system) continue;
 
     try {
-      const payload = buildPayload(message, threadId);
+      const reactionEmbed = await buildReactionEmbed(message);
+      const payload = buildPayload(message, threadId, reactionEmbed);
       const sentMsg = await webhook.send(payload);
       moved++;
 
-      // Add reactions as actual reaction bubbles if the original had any.
+      // Also add real reaction bubbles so the emojis appear clickable.
       if (message.reactions.cache.size > 0) {
         try {
           const fetchedMsg = await destChannel.messages.fetch(sentMsg.id);
-          await copyReactions(fetchedMsg, message);
+          await copyReactionBubbles(fetchedMsg, message);
         } catch {
-          // Could not fetch sent message to copy reactions — skip.
+          // Could not fetch sent message — skip reaction bubbles.
         }
       }
     } catch (err) {
@@ -88,7 +108,7 @@ async function moveMessages(messages, destChannel, deleteOriginals) {
       try {
         await message.delete();
       } catch {
-        // Best-effort deletion; missing permissions or already deleted is fine.
+        // Best-effort; ignore missing permissions or already-deleted messages.
       }
       await sleep(DELAY_MS);
     }
