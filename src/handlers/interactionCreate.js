@@ -215,15 +215,31 @@ async function handleConfirm(interaction, deleteOriginals, sessionId) {
       resultTitle = `${messages.length} message(s) moved`;
     } else if (session.type === 'moveThread') {
       const thread = await guild.channels.fetch(session.sourceChannelId);
-
-      // Create a new thread in the destination channel to hold the moved messages.
-      const newThread = await destChannel.threads.create({
-        name: thread.name,
-        reason: `Moved from #${thread.name} by ${interaction.user.tag}`,
-      });
-
       messages = await fetchAllThreadMessages(thread);
-      const { moved, failed } = await moveMessages(messages, newThread, deleteOriginals);
+
+      // If destination is already a thread, send directly into it.
+      // Otherwise create a new thread inside the destination text channel.
+      let targetChannel;
+      if (destChannel.isThread()) {
+        targetChannel = destChannel;
+      } else if (destChannel.threads) {
+        targetChannel = await destChannel.threads.create({
+          name: thread.name,
+          reason: `Moved from #${thread.name} by ${interaction.user.tag}`,
+        });
+      } else {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0xed4245)
+              .setTitle('Move failed')
+              .setDescription('The destination channel does not support threads. Please select a text channel or an existing thread.'),
+          ],
+          ephemeral: true,
+        });
+      }
+
+      const { moved, failed } = await moveMessages(messages, targetChannel, deleteOriginals);
 
       if (deleteOriginals) {
         try { await thread.delete(); } catch { /* ignore */ }
@@ -235,7 +251,7 @@ async function handleConfirm(interaction, deleteOriginals, sessionId) {
             .setColor(0x57f287)
             .setTitle('Thread moved')
             .setDescription(
-              `Moved **${moved}** message(s) to <#${newThread.id}>${failed ? `, **${failed}** failed` : ''}.`
+              `Moved **${moved}** message(s) to <#${targetChannel.id}>${failed ? `, **${failed}** failed` : ''}.`
             ),
         ],
         ephemeral: true,
