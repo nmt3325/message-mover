@@ -1,40 +1,18 @@
-const { EmbedBuilder, ChannelType } = require('discord.js');
 const { getOrCreateWebhook } = require('./webhook');
 
 const DELAY_MS = 350; // delay between sends to respect rate limits
+const REACTION_DELAY_MS = 300;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
- * Format a message's reactions as a compact string, e.g. "👍 3  ❤️ 1"
- */
-function formatReactions(message) {
-  if (message.reactions.cache.size === 0) return null;
-  return message.reactions.cache
-    .map((r) => `${r.emoji.toString()} ${r.count}`)
-    .join('  ');
-}
-
-/**
- * Build the list of payload options for a single message.
+ * Build the webhook send payload for a single message.
  */
 function buildPayload(message, threadId) {
-  const reactionsText = formatReactions(message);
-
   // Pass through non-gifv embeds unchanged.
   const embeds = message.embeds.filter((e) => e.data.type !== 'gifv');
-
-  if (reactionsText) {
-    embeds.push(
-      new EmbedBuilder()
-        .setColor(0x5865f2)
-        .setFooter({ text: `Reactions: ${reactionsText}` })
-        .toJSON()
-    );
-  }
-
   const files = message.attachments.map((a) => a.url);
 
   return {
@@ -49,10 +27,29 @@ function buildPayload(message, threadId) {
 }
 
 /**
+ * Add reactions from the original message onto a newly sent message.
+ * The bot reacts with each emoji so they appear as real reaction bubbles.
+ * Custom emojis from other servers may fail silently.
+ *
+ * @param {Message} sentMsg - The message that was just sent (fetched from channel)
+ * @param {import('discord.js').Message} originalMessage - The original message with reactions
+ */
+async function copyReactions(sentMsg, originalMessage) {
+  for (const [, reaction] of originalMessage.reactions.cache) {
+    try {
+      await sentMsg.react(reaction.emoji);
+      await sleep(REACTION_DELAY_MS);
+    } catch {
+      // Custom emoji unavailable in this server, or missing permission — skip.
+    }
+  }
+}
+
+/**
  * Move an array of messages (sorted oldest → newest) to destChannel.
  *
- * @param {Message[]} messages
- * @param {TextChannel|ThreadChannel} destChannel
+ * @param {import('discord.js').Message[]} messages
+ * @param {import('discord.js').TextChannel|import('discord.js').ThreadChannel} destChannel
  * @param {boolean} deleteOriginals
  * @returns {Promise<{ moved: number, failed: number }>}
  */
@@ -66,8 +63,18 @@ async function moveMessages(messages, destChannel, deleteOriginals) {
 
     try {
       const payload = buildPayload(message, threadId);
-      await webhook.send(payload);
+      const sentMsg = await webhook.send(payload);
       moved++;
+
+      // Add reactions as actual reaction bubbles if the original had any.
+      if (message.reactions.cache.size > 0) {
+        try {
+          const fetchedMsg = await destChannel.messages.fetch(sentMsg.id);
+          await copyReactions(fetchedMsg, message);
+        } catch {
+          // Could not fetch sent message to copy reactions — skip.
+        }
+      }
     } catch (err) {
       console.error(`Failed to send message ${message.id}:`, err.message);
       failed++;
@@ -93,22 +100,15 @@ async function moveMessages(messages, destChannel, deleteOriginals) {
 /**
  * Fetch up to `limit` messages from a channel starting at (and including) startMessageId.
  * Returns them sorted oldest → newest.
- *
- * @param {TextChannel|ThreadChannel} channel
- * @param {string} startMessageId
- * @param {number} limit
- * @returns {Promise<Message[]>}
  */
 async function fetchMessagesFrom(channel, startMessageId, limit = 100) {
   const startMessage = await channel.messages.fetch(startMessageId);
 
-  // Fetch messages that came AFTER the start message (newer ones).
   const after = await channel.messages.fetch({
     after: startMessageId,
     limit: Math.min(limit - 1, 99),
   });
 
-  // Combine start message with subsequent messages, sort oldest → newest.
   const all = [startMessage, ...after.values()];
   all.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
   return all;
@@ -116,9 +116,6 @@ async function fetchMessagesFrom(channel, startMessageId, limit = 100) {
 
 /**
  * Fetch all messages in a thread, sorted oldest → newest.
- *
- * @param {ThreadChannel} thread
- * @returns {Promise<Message[]>}
  */
 async function fetchAllThreadMessages(thread) {
   const messages = [];
