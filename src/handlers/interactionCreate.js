@@ -306,6 +306,12 @@ async function executeMove(interaction, session, deleteOriginals) {
     const sourceChannel = await guild.channels.fetch(session.sourceChannelId);
     const messages = await fetchMessagesFrom(sourceChannel, session.messageId, 100);
 
+    if (messages.length === 0) {
+      throw new Error(
+        'No messages could be fetched. Make sure the bot has **Read Message History** and **View Channel** permissions in the source channel.'
+      );
+    }
+
     let target;
     if (subAction === 'as_thread') {
       target = await destChannel.threads.create({
@@ -316,7 +322,7 @@ async function executeMove(interaction, session, deleteOriginals) {
       const firstMsg = messages[0];
       target = await destChannel.threads.create({
         name: `Moved from #${sourceChannel.name}`,
-        message: { content: firstMsg.content || '*(moved)*' },
+        message: { content: firstMsg.content || '*(moved — no text)*' },
         reason: `Moved by ${interaction.user.tag}`,
       });
       // Skip the first message since it's already the forum post body.
@@ -334,6 +340,12 @@ async function executeMove(interaction, session, deleteOriginals) {
     const thread = await guild.channels.fetch(session.sourceChannelId);
     const messages = await fetchAllThreadMessages(thread);
 
+    if (messages.length === 0) {
+      throw new Error(
+        'No messages could be fetched from the thread. Make sure the bot has **Read Message History** and **View Channel** permissions in this thread.'
+      );
+    }
+
     let target;
     if (subAction === 'as_thread') {
       target = await destChannel.threads.create({
@@ -344,7 +356,7 @@ async function executeMove(interaction, session, deleteOriginals) {
       const firstMsg = messages[0];
       target = await destChannel.threads.create({
         name: thread.name,
-        message: { content: firstMsg.content || '*(moved)*' },
+        message: { content: firstMsg.content || '*(moved — no text)*' },
         reason: `Moved from #${thread.name} by ${interaction.user.tag}`,
       });
       messages.shift();
