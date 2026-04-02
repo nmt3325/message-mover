@@ -9,7 +9,7 @@ const {
 } = require('discord.js');
 
 const { createSession, getSession, updateSession, deleteSession } = require('../utils/sessions');
-const { moveMessages, fetchMessagesFrom, fetchAllThreadMessages } = require('../utils/moveMessages');
+const { moveMessages, fetchMessagesFrom, fetchAllThreadMessages, createForumPostViaWebhook } = require('../utils/moveMessages');
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -319,14 +319,8 @@ async function executeMove(interaction, session, deleteOriginals) {
         reason: `Moved by ${interaction.user.tag}`,
       });
     } else if (subAction === 'as_forum' || subAction === 'into_forum') {
-      const firstMsg = messages[0];
-      target = await destChannel.threads.create({
-        name: `Moved from #${sourceChannel.name}`,
-        message: { content: firstMsg.content || '*(moved — no text)*' },
-        reason: `Moved by ${interaction.user.tag}`,
-      });
-      // Skip the first message since it's already the forum post body.
-      messages.shift();
+      // Use webhook to create the forum post so the first message keeps the original author.
+      target = await createForumPostViaWebhook(destChannel, messages.shift(), `Moved from #${sourceChannel.name}`);
     } else {
       target = destChannel; // into_channel or into_existing
     }
@@ -353,13 +347,8 @@ async function executeMove(interaction, session, deleteOriginals) {
         reason: `Moved from #${thread.name} by ${interaction.user.tag}`,
       });
     } else if (subAction === 'into_forum') {
-      const firstMsg = messages[0];
-      target = await destChannel.threads.create({
-        name: thread.name,
-        message: { content: firstMsg.content || '*(moved — no text)*' },
-        reason: `Moved from #${thread.name} by ${interaction.user.tag}`,
-      });
-      messages.shift();
+      // Use webhook to create the forum post so the first message keeps the original author.
+      target = await createForumPostViaWebhook(destChannel, messages.shift(), thread.name);
     } else {
       // flatten_channel or flatten_existing → send directly to destChannel
       target = destChannel;

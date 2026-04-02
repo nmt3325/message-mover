@@ -154,4 +154,42 @@ async function fetchAllThreadMessages(thread) {
   return messages;
 }
 
-module.exports = { moveMessages, fetchMessagesFrom, fetchAllThreadMessages };
+/**
+ * Create a new forum post via webhook, preserving the original author's
+ * name and avatar for the first message (the post body).
+ *
+ * Uses the webhook `threadName` option instead of threads.create(),
+ * which would send the first message as the bot.
+ *
+ * @param {ForumChannel} forumChannel
+ * @param {Message} firstMessage - becomes the forum post body
+ * @param {string} postName - title of the new forum post
+ * @returns {Promise<ThreadChannel>} the newly created forum post (thread)
+ */
+async function createForumPostViaWebhook(forumChannel, firstMessage, postName) {
+  const { webhook } = await getOrCreateWebhook(forumChannel);
+
+  const reactionEmbed = await buildReactionEmbed(firstMessage);
+  const payload = buildPayload(firstMessage, undefined, reactionEmbed);
+  // Setting threadName instead of threadId tells Discord to create a new forum post.
+  payload.threadName = postName;
+
+  const sentMsg = await webhook.send(payload);
+  const newThreadId = sentMsg.channel_id;
+
+  // Fetch the created thread so we can add reactions and return it to the caller.
+  const newThread = await forumChannel.guild.channels.fetch(newThreadId);
+
+  if (firstMessage.reactions.cache.size > 0) {
+    try {
+      const fetchedMsg = await newThread.messages.fetch(sentMsg.id);
+      await copyReactionBubbles(fetchedMsg, firstMessage);
+    } catch {
+      // Skip reactions if fetch fails.
+    }
+  }
+
+  return newThread;
+}
+
+module.exports = { moveMessages, fetchMessagesFrom, fetchAllThreadMessages, createForumPostViaWebhook };
