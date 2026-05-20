@@ -37,20 +37,15 @@ async function buildReactionEmbed(message) {
 
 /**
  * Build the webhook send payload for a single message.
- * freshMember, if provided, is a recently-fetched GuildMember whose nickname
- * is guaranteed to be current (avoids stale cache returning the global display name).
  */
-function buildPayload(message, threadId, reactionEmbed, freshMember) {
+function buildPayload(message, threadId, reactionEmbed) {
   const embeds = message.embeds.filter((e) => e.data.type !== 'gifv');
   if (reactionEmbed) embeds.push(reactionEmbed);
   const files = message.attachments.map((a) => a.url);
 
-  const member = freshMember ?? message.member;
-  const username = member?.displayName ?? message.author.globalName ?? message.author.username;
-
   return {
     content: message.content || undefined,
-    username,
+    username: message.member?.displayName ?? message.author.username,
     avatarURL: message.author.displayAvatarURL({ extension: 'png', size: 256 }),
     embeds: embeds.length ? embeds : undefined,
     files: files.length ? files : undefined,
@@ -58,23 +53,6 @@ function buildPayload(message, threadId, reactionEmbed, freshMember) {
     flags: MessageFlags.SuppressNotifications,
     threadId,
   };
-}
-
-/**
- * Fetch fresh GuildMember data for all unique authors in the messages array.
- * Returns a Map<userId, GuildMember>.
- */
-async function fetchMemberMap(messages) {
-  const guild = messages.find((m) => !m.system && m.guild)?.guild;
-  if (!guild) return new Map();
-
-  const authorIds = [...new Set(messages.filter((m) => !m.system).map((m) => m.author.id))];
-  try {
-    const fetched = await guild.members.fetch({ user: authorIds });
-    return fetched instanceof Map ? fetched : new Map(fetched);
-  } catch {
-    return new Map();
-  }
 }
 
 /**
@@ -97,7 +75,6 @@ async function copyReactionBubbles(sentMsg, originalMessage) {
  */
 async function moveMessages(messages, destChannel, deleteOriginals) {
   const { webhook, threadId } = await getOrCreateWebhook(destChannel);
-  const memberMap = await fetchMemberMap(messages);
   let moved = 0;
   let failed = 0;
 
@@ -106,7 +83,7 @@ async function moveMessages(messages, destChannel, deleteOriginals) {
 
     try {
       const reactionEmbed = await buildReactionEmbed(message);
-      const payload = buildPayload(message, threadId, reactionEmbed, memberMap.get(message.author.id));
+      const payload = buildPayload(message, threadId, reactionEmbed);
       const sentMsg = await webhook.send(payload);
       moved++;
 
@@ -192,9 +169,8 @@ async function fetchAllThreadMessages(thread) {
 async function createForumPostViaWebhook(forumChannel, firstMessage, postName) {
   const { webhook } = await getOrCreateWebhook(forumChannel);
 
-  const memberMap = await fetchMemberMap([firstMessage]);
   const reactionEmbed = await buildReactionEmbed(firstMessage);
-  const payload = buildPayload(firstMessage, undefined, reactionEmbed, memberMap.get(firstMessage.author.id));
+  const payload = buildPayload(firstMessage, undefined, reactionEmbed);
   // Setting threadName instead of threadId tells Discord to create a new forum post.
   payload.threadName = postName;
 
