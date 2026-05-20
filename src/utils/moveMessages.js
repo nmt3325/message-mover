@@ -17,12 +17,27 @@ function sleep(ms) {
 async function buildReactionEmbed(message) {
   if (message.reactions.cache.size === 0) return null;
 
+  const guild = message.guild;
   const lines = [];
   for (const [, reaction] of message.reactions.cache) {
     let names;
     try {
       const users = await reaction.users.fetch();
-      names = users.map((u) => u.username).join(', ');
+      if (guild) {
+        const userIds = [...users.keys()];
+        let memberMap;
+        try {
+          const fetched = await guild.members.fetch({ user: userIds });
+          memberMap = fetched instanceof Map ? fetched : new Map(fetched);
+        } catch {
+          memberMap = new Map();
+        }
+        names = users
+          .map((u) => memberMap.get(u.id)?.displayName ?? u.globalName ?? u.username)
+          .join(', ');
+      } else {
+        names = users.map((u) => u.globalName ?? u.username).join(', ');
+      }
     } catch {
       names = `${reaction.count} user(s)`;
     }
