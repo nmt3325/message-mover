@@ -18,6 +18,11 @@ const commands = [
     type: ApplicationCommandType.Message,
     default_member_permissions: null,
   },
+  {
+    name: 'Move this channel',
+    type: ApplicationCommandType.Message,
+    default_member_permissions: null,
+  },
 ];
 
 const rest = new REST({ version: '10' }).setToken(process.env.BOT_TOKEN);

@@ -9,7 +9,16 @@ const {
 } = require('discord.js');
 
 const { createSession, getSession, updateSession, deleteSession } = require('../utils/sessions');
-const { moveMessages, fetchMessagesFrom, fetchAllThreadMessages, createForumPostViaWebhook } = require('../utils/moveMessages');
+const { moveMessages, fetchMessagesFrom, fetchAllChannelMessages, fetchAllThreadMessages, createForumPostViaWebhook } = require('../utils/moveMessages');
+
+// ─── Logging ──────────────────────────────────────────────────────────────────
+
+function log(...args) {
+  console.log(`[${new Date().toISOString()}]`, ...args);
+}
+function logError(...args) {
+  console.error(`[${new Date().toISOString()}]`, ...args);
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -111,6 +120,7 @@ function subActionRowThread(sessionId) {
 
 async function handleMoveThis(interaction) {
   const message = interaction.targetMessage;
+  log(`[moveThis] user=${interaction.user.tag} channel=${interaction.channelId} messageId=${message.id}`);
 
   if (!hasManageMessages(interaction.member, interaction.channel)) {
     return interaction.reply({ content: 'You need the **Manage Messages** permission to move messages.', ephemeral: true });
@@ -123,6 +133,7 @@ async function handleMoveThis(interaction) {
     messageId: message.id,
     initiatorId: interaction.user.id,
   });
+  log(`[moveThis] session created: ${sessionId}`);
 
   await interaction.reply({
     embeds: [
@@ -138,10 +149,12 @@ async function handleMoveThis(interaction) {
     components: [channelSelectRow(sessionId, 'into_channel')],
     ephemeral: true,
   });
+  log(`[moveThis] reply sent, session=${sessionId}`);
 }
 
 async function handleMoveThisAndBelow(interaction) {
   const message = interaction.targetMessage;
+  log(`[moveThisAndBelow] user=${interaction.user.tag} channel=${interaction.channelId} messageId=${message.id}`);
 
   if (!hasManageMessages(interaction.member, interaction.channel)) {
     return interaction.reply({ content: 'You need the **Manage Messages** permission to move messages.', ephemeral: true });
@@ -153,8 +166,9 @@ async function handleMoveThisAndBelow(interaction) {
     messageId: message.id,
     initiatorId: interaction.user.id,
   });
+  log(`[moveThisAndBelow] session created: ${sessionId}`);
 
-  await interaction.reply({
+  const response = await interaction.reply({
     embeds: [
       new EmbedBuilder()
         .setColor(0x5865f2)
@@ -168,11 +182,15 @@ async function handleMoveThisAndBelow(interaction) {
     ],
     components: [subActionRowBelow(sessionId)],
     ephemeral: true,
+    withResponse: true,
   });
+  const msgFlags = response?.resource?.message?.flags;
+  log(`[moveThisAndBelow] reply sent, session=${sessionId}, message flags=${msgFlags} (ephemeral=${!!(msgFlags & 64)})`);
 }
 
 async function handleMoveThread(interaction) {
   const channel = interaction.channel;
+  log(`[moveThread] user=${interaction.user.tag} channel=${channel.id} isThread=${channel.isThread()}`);
 
   if (!channel.isThread()) {
     return interaction.reply({
@@ -191,6 +209,7 @@ async function handleMoveThread(interaction) {
     messageId: interaction.targetMessage.id,
     initiatorId: interaction.user.id,
   });
+  log(`[moveThread] session created: ${sessionId}`);
 
   await interaction.reply({
     embeds: [
@@ -204,14 +223,53 @@ async function handleMoveThread(interaction) {
     components: [subActionRowThread(sessionId)],
     ephemeral: true,
   });
+  log(`[moveThread] reply sent, session=${sessionId}`);
+}
+
+async function handleMoveThisChannel(interaction) {
+  const channel = interaction.channel;
+  log(`[moveThisChannel] user=${interaction.user.tag} channel=${channel.id} isThread=${channel.isThread()}`);
+
+  if (channel.isThread()) {
+    return interaction.reply({
+      content: 'This action works in text channels. For threads, use **Move thread / forum** instead.',
+      ephemeral: true,
+    });
+  }
+
+  if (!hasManageMessages(interaction.member, channel)) {
+    return interaction.reply({ content: 'You need the **Manage Messages** permission to move channels.', ephemeral: true });
+  }
+
+  const sessionId = createSession({
+    type: 'moveThisChannel',
+    sourceChannelId: channel.id,
+    messageId: interaction.targetMessage.id,
+    initiatorId: interaction.user.id,
+  });
+  log(`[moveThisChannel] session created: ${sessionId}`);
+
+  await interaction.reply({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(0x5865f2)
+        .setTitle('Move this channel')
+        .setDescription(`Channel: **#${channel.name}**\n\nHow do you want to move it?`),
+    ],
+    components: [subActionRowThread(sessionId)],
+    ephemeral: true,
+  });
+  log(`[moveThisChannel] reply sent, session=${sessionId}`);
 }
 
 // ─── Sub-action button handler ────────────────────────────────────────────────
 
 async function handleSubAction(interaction, subAction, sessionId) {
+  log(`[subAction] user=${interaction.user.tag} subAction=${subAction} session=${sessionId}`);
   const session = getSession(sessionId);
   if (!session) {
-    return interaction.update({ content: 'This action has expired. Please try again.', components: [], embeds: [], ephemeral: true });
+    log(`[subAction] session not found: ${sessionId}`);
+    return interaction.update({ content: 'This action has expired. Please try again.', components: [], embeds: [] });
   }
 
   updateSession(sessionId, { subAction });
@@ -241,21 +299,24 @@ async function handleSubAction(interaction, subAction, sessionId) {
         .setDescription(destLabel),
     ],
     components: [channelSelectRow(sessionId, subAction)],
-    ephemeral: true,
   });
+  log(`[subAction] update sent, session=${sessionId} subAction=${subAction}`);
 }
 
 // ─── Channel-select handler ───────────────────────────────────────────────────
 
 async function handleDestSelect(interaction, sessionId) {
+  log(`[destSelect] user=${interaction.user.tag} session=${sessionId} dest=${interaction.values[0]}`);
   const session = getSession(sessionId);
   if (!session) {
-    return interaction.update({ content: 'This action has expired. Please try again.', components: [], embeds: [], ephemeral: true });
+    log(`[destSelect] session not found: ${sessionId}`);
+    return interaction.update({ content: 'This action has expired. Please try again.', components: [], embeds: [] });
   }
 
   const destChannelId = interaction.values[0];
 
   if (destChannelId === session.sourceChannelId) {
+    log(`[destSelect] destination same as source, rejected`);
     return interaction.update({
       embeds: [
         new EmbedBuilder()
@@ -263,7 +324,6 @@ async function handleDestSelect(interaction, sessionId) {
           .setDescription('The destination must be different from the source channel.'),
       ],
       components: [channelSelectRow(sessionId, session.subAction)],
-      ephemeral: true,
     });
   }
 
@@ -280,14 +340,16 @@ async function handleDestSelect(interaction, sessionId) {
         ),
     ],
     components: [confirmRow(sessionId)],
-    ephemeral: true,
   });
+  log(`[destSelect] confirm dialog sent, session=${sessionId} dest=${destChannelId}`);
 }
 
 // ─── Execute move ─────────────────────────────────────────────────────────────
 
 async function executeMove(interaction, session, deleteOriginals) {
   const guild = interaction.guild;
+  log(`[executeMove] type=${session.type} subAction=${session.subAction} deleteOriginals=${deleteOriginals}`);
+
   const destChannel = await guild.channels.fetch(session.destChannelId).catch(() => null);
   if (!destChannel) throw new Error('Could not find the destination channel.');
 
@@ -297,6 +359,7 @@ async function executeMove(interaction, session, deleteOriginals) {
   if (session.type === 'moveThis') {
     const sourceChannel = await guild.channels.fetch(session.sourceChannelId);
     const msg = await sourceChannel.messages.fetch(session.messageId);
+    log(`[executeMove] moveThis: fetched message ${msg.id}`);
     const { moved, failed } = await moveMessages([msg], destChannel, deleteOriginals);
     return { moved, failed, targetId: destChannel.id, title: 'Message moved' };
   }
@@ -304,7 +367,9 @@ async function executeMove(interaction, session, deleteOriginals) {
   // ── moveThisAndBelow ──────────────────────────────────────────────────────
   if (session.type === 'moveThisAndBelow') {
     const sourceChannel = await guild.channels.fetch(session.sourceChannelId);
+    log(`[executeMove] moveThisAndBelow: fetching messages from ${sourceChannel.id} starting at ${session.messageId}`);
     const messages = await fetchMessagesFrom(sourceChannel, session.messageId, 100);
+    log(`[executeMove] moveThisAndBelow: fetched ${messages.length} messages`);
 
     if (messages.length === 0) {
       throw new Error(
@@ -314,13 +379,17 @@ async function executeMove(interaction, session, deleteOriginals) {
 
     let target;
     if (subAction === 'as_thread') {
+      log(`[executeMove] creating thread in ${destChannel.id}`);
       target = await destChannel.threads.create({
         name: `Moved from #${sourceChannel.name}`,
         reason: `Moved by ${interaction.user.tag}`,
       });
+      log(`[executeMove] thread created: ${target.id}`);
     } else if (subAction === 'as_forum' || subAction === 'into_forum') {
       // Use webhook to create the forum post so the first message keeps the original author.
+      log(`[executeMove] creating forum post in ${destChannel.id}`);
       target = await createForumPostViaWebhook(destChannel, messages.shift(), `Moved from #${sourceChannel.name}`);
+      log(`[executeMove] forum post created: ${target.id}, remaining messages: ${messages.length}`);
     } else {
       target = destChannel; // into_channel or into_existing
     }
@@ -332,7 +401,9 @@ async function executeMove(interaction, session, deleteOriginals) {
   // ── moveThread ────────────────────────────────────────────────────────────
   if (session.type === 'moveThread') {
     const thread = await guild.channels.fetch(session.sourceChannelId);
+    log(`[executeMove] moveThread: fetching all messages from thread ${thread.id}`);
     const messages = await fetchAllThreadMessages(thread);
+    log(`[executeMove] moveThread: fetched ${messages.length} messages`);
 
     if (messages.length === 0) {
       throw new Error(
@@ -346,9 +417,11 @@ async function executeMove(interaction, session, deleteOriginals) {
         name: thread.name,
         reason: `Moved from #${thread.name} by ${interaction.user.tag}`,
       });
+      log(`[executeMove] thread created: ${target.id}`);
     } else if (subAction === 'into_forum') {
       // Use webhook to create the forum post so the first message keeps the original author.
       target = await createForumPostViaWebhook(destChannel, messages.shift(), thread.name);
+      log(`[executeMove] forum post created: ${target.id}, remaining messages: ${messages.length}`);
     } else {
       // flatten_channel or flatten_existing → send directly to destChannel
       target = destChannel;
@@ -357,10 +430,43 @@ async function executeMove(interaction, session, deleteOriginals) {
     const { moved, failed } = await moveMessages(messages, target, deleteOriginals);
 
     if (deleteOriginals) {
-      try { await thread.delete(); } catch { /* ignore */ }
+      log(`[executeMove] deleting source thread ${thread.id}`);
+      try { await thread.delete(); } catch (err) { log(`[executeMove] thread delete failed: ${err.message}`); }
     }
 
     return { moved, failed, targetId: target.id, title: 'Thread moved' };
+  }
+
+  // ── moveThisChannel ───────────────────────────────────────────────────────
+  if (session.type === 'moveThisChannel') {
+    const sourceChannel = await guild.channels.fetch(session.sourceChannelId);
+    log(`[executeMove] moveThisChannel: fetching all messages from channel ${sourceChannel.id}`);
+    const messages = await fetchAllChannelMessages(sourceChannel);
+    log(`[executeMove] moveThisChannel: fetched ${messages.length} messages`);
+
+    if (messages.length === 0) {
+      throw new Error(
+        'No messages could be fetched from the channel. Make sure the bot has **Read Message History** and **View Channel** permissions.'
+      );
+    }
+
+    let target;
+    if (subAction === 'as_thread') {
+      target = await destChannel.threads.create({
+        name: sourceChannel.name,
+        reason: `Moved from #${sourceChannel.name} by ${interaction.user.tag}`,
+      });
+      log(`[executeMove] thread created: ${target.id}`);
+    } else if (subAction === 'as_forum' || subAction === 'into_forum') {
+      target = await createForumPostViaWebhook(destChannel, messages.shift(), sourceChannel.name);
+      log(`[executeMove] forum post created: ${target.id}, remaining messages: ${messages.length}`);
+    } else {
+      // flatten_channel or flatten_existing → send directly to destChannel
+      target = destChannel;
+    }
+
+    const { moved, failed } = await moveMessages(messages, target, deleteOriginals);
+    return { moved, failed, targetId: target.id, title: `Channel moved (${moved} messages)` };
   }
 
   throw new Error('Unknown session type: ' + session.type);
@@ -369,13 +475,16 @@ async function executeMove(interaction, session, deleteOriginals) {
 // ─── Confirmation-button handler ──────────────────────────────────────────────
 
 async function handleConfirm(interaction, deleteOriginals, sessionId) {
+  log(`[confirm] user=${interaction.user.tag} session=${sessionId} deleteOriginals=${deleteOriginals}`);
   const session = getSession(sessionId);
   if (!session) {
-    return interaction.update({ content: 'This action has expired. Please try again.', components: [], embeds: [], ephemeral: true });
+    log(`[confirm] session not found: ${sessionId}`);
+    return interaction.update({ content: 'This action has expired. Please try again.', components: [], embeds: [] });
   }
 
   deleteSession(sessionId);
 
+  log(`[confirm] showing "Moving messages…" for session=${sessionId}`);
   await interaction.update({
     embeds: [
       new EmbedBuilder()
@@ -384,34 +493,36 @@ async function handleConfirm(interaction, deleteOriginals, sessionId) {
         .setDescription('Please wait.'),
     ],
     components: [],
-    ephemeral: true,
   });
+  log(`[confirm] "Moving messages…" update sent`);
 
+  const startTime = Date.now();
+  let resultEmbed;
   try {
     const { moved, failed, targetId, title } = await executeMove(interaction, session, deleteOriginals);
-
-    await interaction.editReply({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(0x57f287)
-          .setTitle(title)
-          .setDescription(
-            `Moved **${moved}** message(s) to <#${targetId}>${failed ? `, **${failed}** failed` : ''}.`
-          ),
-      ],
-      ephemeral: true,
-    });
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    log(`[confirm] executeMove done in ${elapsed}s: moved=${moved} failed=${failed} target=${targetId}`);
+    resultEmbed = new EmbedBuilder()
+      .setColor(0x57f287)
+      .setTitle(title)
+      .setDescription(
+        `Moved **${moved}** message(s) to <#${targetId}>${failed ? `, **${failed}** failed` : ''}.`
+      );
   } catch (err) {
-    console.error('Move failed:', err);
-    await interaction.editReply({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(0xed4245)
-          .setTitle('Move failed')
-          .setDescription(`An error occurred: ${err.message}`),
-      ],
-      ephemeral: true,
-    });
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    logError(`[confirm] executeMove failed after ${elapsed}s:`, err);
+    resultEmbed = new EmbedBuilder()
+      .setColor(0xed4245)
+      .setTitle('Move failed')
+      .setDescription(`An error occurred: ${err.message}`);
+  }
+
+  log(`[confirm] calling editReply with result`);
+  try {
+    await interaction.editReply({ embeds: [resultEmbed] });
+    log(`[confirm] editReply sent successfully`);
+  } catch (err) {
+    logError(`[confirm] editReply failed (token may have expired):`, err);
   }
 }
 
@@ -423,6 +534,7 @@ module.exports = async function handleInteraction(interaction) {
       if (interaction.commandName === 'Move this') return handleMoveThis(interaction);
       if (interaction.commandName === 'Move this & below') return handleMoveThisAndBelow(interaction);
       if (interaction.commandName === 'Move thread / forum') return handleMoveThread(interaction);
+      if (interaction.commandName === 'Move this channel') return handleMoveThisChannel(interaction);
     }
 
     if (interaction.isButton()) {
@@ -441,7 +553,7 @@ module.exports = async function handleInteraction(interaction) {
       if (action === 'move_dest') return handleDestSelect(interaction, sessionId);
     }
   } catch (err) {
-    console.error('Unhandled interaction error:', err);
+    logError('Unhandled interaction error:', err);
     const reply = { content: 'An unexpected error occurred.', ephemeral: true };
     if (interaction.replied || interaction.deferred) {
       await interaction.editReply(reply).catch(() => {});

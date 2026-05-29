@@ -4,6 +4,13 @@ const { getOrCreateWebhook } = require('./webhook');
 const DELAY_MS = 350;
 const REACTION_DELAY_MS = 300;
 
+function log(...args) {
+  console.log(`[${new Date().toISOString()}]`, ...args);
+}
+function logError(...args) {
+  console.error(`[${new Date().toISOString()}]`, ...args);
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -63,8 +70,12 @@ function buildPayload(message, threadId, reactionEmbed, freshMember) {
   const member = freshMember ?? message.member;
   const username = member?.displayName ?? message.author.globalName ?? message.author.username;
 
+  const unixSec = Math.floor(message.createdTimestamp / 1000);
+  const timestampLine = `-# 元の送信日時: <t:${unixSec}:f>`;
+  const content = message.content ? `${timestampLine}\n${message.content}` : timestampLine;
+
   return {
-    content: message.content || undefined,
+    content,
     username,
     avatarURL: message.author.displayAvatarURL({ extension: 'png', size: 256 }),
     embeds: embeds.length ? embeds : undefined,
@@ -111,48 +122,81 @@ async function copyReactionBubbles(sentMsg, originalMessage) {
  * Move an array of messages (sorted oldest → newest) to destChannel.
  */
 async function moveMessages(messages, destChannel, deleteOriginals) {
+  const startTime = Date.now();
+  log(`[moveMessages] start: total=${messages.length} dest=${destChannel.id} deleteOriginals=${deleteOriginals}`);
+
   const { webhook, threadId } = await getOrCreateWebhook(destChannel);
   const memberMap = await fetchMemberMap(messages);
   let moved = 0;
   let failed = 0;
+  let index = 0;
 
   for (const message of messages) {
-    if (message.system) continue;
+    index++;
+    if (message.system) {
+      log(`[moveMessages] [${index}/${messages.length}] skipping system message ${message.id}`);
+      continue;
+    }
 
+    log(`[moveMessages] [${index}/${messages.length}] sending message ${message.id} (reactions=${message.reactions.cache.size})`);
     try {
       const reactionEmbed = await buildReactionEmbed(message);
       const payload = buildPayload(message, threadId, reactionEmbed, memberMap.get(message.author.id));
       const sentMsg = await webhook.send(payload);
       moved++;
+      log(`[moveMessages] [${index}/${messages.length}] sent OK → ${sentMsg.id}`);
 
       // Also add real reaction bubbles so the emojis appear clickable.
       if (message.reactions.cache.size > 0) {
         try {
           const fetchedMsg = await destChannel.messages.fetch(sentMsg.id);
+          log(`[moveMessages] [${index}/${messages.length}] copying ${message.reactions.cache.size} reaction(s)`);
           await copyReactionBubbles(fetchedMsg, message);
-        } catch {
-          // Could not fetch sent message — skip reaction bubbles.
+        } catch (err) {
+          log(`[moveMessages] [${index}/${messages.length}] reaction copy failed: ${err.message}`);
         }
       }
     } catch (err) {
-      console.error(`Failed to send message ${message.id}:`, err.message);
+      logError(`[moveMessages] [${index}/${messages.length}] send failed for ${message.id}:`, err.message);
       failed++;
     }
 
     await sleep(DELAY_MS);
   }
 
-  if (deleteOriginals) {
-    for (const message of messages) {
-      try {
-        await message.delete();
-      } catch {
-        // Best-effort; ignore missing permissions or already-deleted messages.
-      }
-      await sleep(DELAY_MS);
+  log(`[moveMessages] send phase done: moved=${moved} failed=${failed} elapsed=${((Date.now() - startTime) / 1000).toFixed(1)}s`);
+
+  if (deleteOriginals && messages.length > 0) {
+    const sourceChannel = messages[0].channel;
+    log(`[moveMessages] delete phase: attempting bulkDelete of ${messages.length} messages in ${sourceChannel.id}`);
+    const deleted = await sourceChannel.bulkDelete(messages, true).catch((err) => {
+      logError(`[moveMessages] bulkDelete failed: ${err.message}`);
+      return null;
+    });
+    if (deleted) {
+      log(`[moveMessages] bulkDelete deleted ${deleted.size} message(s)`);
     }
+    // bulkDelete(filterOld=true) skips messages older than 14 days; delete those individually.
+    const skippedIds = deleted
+      ? new Set(messages.map((m) => m.id).filter((id) => !deleted.has(id)))
+      : new Set(messages.map((m) => m.id));
+    if (skippedIds.size > 0) {
+      log(`[moveMessages] individually deleting ${skippedIds.size} message(s) skipped by bulkDelete`);
+      for (const message of messages) {
+        if (!skippedIds.has(message.id)) continue;
+        try {
+          await message.delete();
+          log(`[moveMessages] individually deleted ${message.id}`);
+        } catch (err) {
+          log(`[moveMessages] individual delete failed for ${message.id}: ${err.message}`);
+        }
+        await sleep(DELAY_MS);
+      }
+    }
+    log(`[moveMessages] delete phase done, elapsed=${((Date.now() - startTime) / 1000).toFixed(1)}s`);
   }
 
+  log(`[moveMessages] complete: moved=${moved} failed=${failed} total elapsed=${((Date.now() - startTime) / 1000).toFixed(1)}s`);
   return { moved, failed };
 }
 
@@ -171,6 +215,26 @@ async function fetchMessagesFrom(channel, startMessageId, limit = 100) {
   const all = [startMessage, ...after.values()];
   all.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
   return all;
+}
+
+/**
+ * Fetch all messages in a regular text channel, sorted oldest → newest.
+ */
+async function fetchAllChannelMessages(channel) {
+  const messages = [];
+  let before;
+
+  while (true) {
+    const batch = await channel.messages.fetch({ limit: 100, before });
+    if (batch.size === 0) break;
+    messages.push(...batch.values());
+    before = batch.last()?.id;
+    if (batch.size < 100) break;
+  }
+
+  messages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+  log(`[fetchAllChannelMessages] fetched ${messages.length} messages from channel ${channel.id}`);
+  return messages;
 }
 
 /**
@@ -231,4 +295,4 @@ async function createForumPostViaWebhook(forumChannel, firstMessage, postName) {
   return newThread;
 }
 
-module.exports = { moveMessages, fetchMessagesFrom, fetchAllThreadMessages, createForumPostViaWebhook };
+module.exports = { moveMessages, fetchMessagesFrom, fetchAllChannelMessages, fetchAllThreadMessages, createForumPostViaWebhook };
